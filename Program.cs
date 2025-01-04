@@ -1,9 +1,11 @@
 using AutoMapper;
+using FluentValidation;
 using MagicVilla_CouponAPI;
 using MagicVilla_CouponAPI.Data;
 using MagicVilla_CouponAPI.Models;
 using MagicVilla_CouponAPI.Models.DTO;
 using Microsoft.AspNetCore.Mvc;
+using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,6 +14,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddAutoMapper(typeof(MappingConfig));
+builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 
 var app = builder.Build();
 
@@ -26,25 +29,44 @@ if (app.Environment.IsDevelopment())
 app.MapGet("/api/coupon", (ILogger<Program> _logger) =>
 {
     _logger.Log(LogLevel.Information, "GetCoupons called");
-    return Results.Ok(CouponStore.Coupons);
-}).WithName("GetCoupons").Produces<IEnumerable<Coupon>>(200);
+    APIResponse response = new();
+    response.Result = CouponStore.Coupons;
+    response.IsSuccess = true;
+    response.StatusCode = HttpStatusCode.OK;
+
+    return Results.Ok(response);
+}).WithName("GetCoupons").Produces<APIResponse>(200);
 
 //Get Coupon by Id call
 app.MapGet("/api/coupon/{id:int}", (int id) =>
 {
-    return Results.Ok(CouponStore.Coupons.FirstOrDefault(c => c.Id == id));
-}).WithName("GetCoupon").Produces<Coupon>(200);
+    APIResponse response = new();
+    response.Result = CouponStore.Coupons.FirstOrDefault(c => c.Id == id);
+    response.IsSuccess = true;
+    response.StatusCode = HttpStatusCode.OK;
+    return Results.Ok(response);
+}).WithName("GetCoupon").Produces<APIResponse>(200);
 
 //Add Coupon call
-app.MapPost("/api/coupon", (IMapper _mapper, [FromBody] CouponCreateDTO coupon_C_DTO) =>
+app.MapPost("/api/coupon", async (IMapper _mapper, IValidator<CouponCreateDTO> _validation, [FromBody] CouponCreateDTO coupon_C_DTO) =>
 {
-    if (string.IsNullOrEmpty(coupon_C_DTO.Name))
+    APIResponse response = new()
     {
-        return Results.BadRequest("Invalid Id or Coupon Name.");
+        IsSuccess = false,
+        StatusCode = HttpStatusCode.BadRequest
+    };
+
+    var validationResult = await _validation.ValidateAsync(coupon_C_DTO);
+
+    if (!validationResult.IsValid)
+    {
+        response.ErrorMessages.Add(validationResult.Errors.FirstOrDefault().ToString());
+        return Results.BadRequest(response);
     }
     if (CouponStore.Coupons.FirstOrDefault(u => u.Name.ToLower() == coupon_C_DTO.Name.ToLower()) != null)
     {
-        return Results.BadRequest("Coupon name already exists.");
+        response.ErrorMessages.Add("Coupon name already exists.");
+        return Results.BadRequest(response);
     }
 
     Coupon coupon = _mapper.Map<Coupon>(coupon_C_DTO);
@@ -55,35 +77,69 @@ app.MapPost("/api/coupon", (IMapper _mapper, [FromBody] CouponCreateDTO coupon_C
     CouponDTO couponDTO = _mapper.Map<CouponDTO>(coupon);
 
     //return Results.Created("GetCoupon", coupon);
-    return Results.CreatedAtRoute("GetCoupon", new { id = coupon.Id }, couponDTO);
-}).WithName("CreateCoupon").Accepts<CouponCreateDTO>("application/json").Produces<Coupon>(201).Produces(400);
+    //return Results.CreatedAtRoute("GetCoupon", new { id = coupon.Id }, couponDTO);
+    response.Result = couponDTO;
+    response.IsSuccess = true;
+    response.StatusCode = HttpStatusCode.Created;
+    return Results.Ok(response);
+}).WithName("CreateCoupon").Accepts<CouponCreateDTO>("application/json").Produces<APIResponse>(201).Produces(400);
+
+
+
 
 //Update Coupon call
-app.MapPut("/api/coupon/{id:int}", (int id, [FromBody] Coupon coupon) =>
+app.MapPut("/api/coupon", async (IMapper _mapper, IValidator<CouponUpdateDTO> _validation, [FromBody] CouponUpdateDTO coupon_U_DTO) =>
 {
-    var existingCoupon = CouponStore.Coupons.FirstOrDefault(c => c.Id == id);
-    if (existingCoupon == null)
+    APIResponse response = new()
     {
-        return Results.NotFound();
+        IsSuccess = false,
+        StatusCode = HttpStatusCode.BadRequest
+    };
+
+    var validationResult = await _validation.ValidateAsync(coupon_U_DTO);
+
+    if (!validationResult.IsValid)
+    {
+        response.ErrorMessages.Add(validationResult.Errors.FirstOrDefault().ToString());
+        return Results.BadRequest(response);
     }
-    existingCoupon.Name = coupon.Name;
-    existingCoupon.Percent = coupon.Percent;
-    existingCoupon.IsActive = coupon.IsActive;
-    existingCoupon.LastUpdated = DateTime.Now;
-    return Results.Ok(existingCoupon);
-}).WithName("UpdateCoupon").Produces<Coupon>(200).Produces(404);
+
+    Coupon couponFromStore = CouponStore.Coupons.FirstOrDefault(u => u.Id == coupon_U_DTO.Id);
+    couponFromStore.IsActive = coupon_U_DTO.IsActive;
+    couponFromStore.Name = coupon_U_DTO.Name;
+    couponFromStore.Percent = coupon_U_DTO.Percent;
+    couponFromStore.LastUpdated = DateTime.Now;
+
+    response.Result = _mapper.Map<CouponDTO>(couponFromStore); ;
+    response.IsSuccess = true;
+    response.StatusCode = HttpStatusCode.OK;
+    return Results.Ok(response);
+}).WithName("UpdateCoupon").Accepts<CouponUpdateDTO>("application/json").Produces<APIResponse>(200).Produces(400);
 
 //Delete Coupon call
 app.MapDelete("/api/coupon/{id:int}", (int id) =>
 {
-    var existingCoupon = CouponStore.Coupons.FirstOrDefault(c => c.Id == id);
-    if (existingCoupon == null)
+    APIResponse response = new()
     {
-        return Results.NotFound();
+        IsSuccess = false,
+        StatusCode = HttpStatusCode.BadRequest
+    };
+
+    Coupon couponFromStore = CouponStore.Coupons.FirstOrDefault(u => u.Id == id);
+    if (couponFromStore == null)
+    {
+        response.ErrorMessages.Add("Coupon not found.");
+        return Results.BadRequest(response);
     }
-    CouponStore.Coupons.Remove(existingCoupon);
-    return Results.Ok(existingCoupon);
-}).WithName("DeleteCoupon").Produces<Coupon>(200).Produces(404);
+    else
+    {
+        CouponStore.Coupons.Remove(couponFromStore); 
+        response.IsSuccess = true;
+        response.StatusCode = HttpStatusCode.OK;
+        return Results.Ok(response);
+    }
+    
+}).WithName("DeleteCoupon").Produces<Coupon>(200).Produces(400);
 
 
 app.UseHttpsRedirection();
